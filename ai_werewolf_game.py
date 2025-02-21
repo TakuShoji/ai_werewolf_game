@@ -546,6 +546,7 @@ def train_agents(episodes=1000, batch_size=32):
             agent.update_epsilon()
         
         # 100エピソードごとに勝率を表示
+        # 100エピソードごとに勝率を表示する
         if episode % 100 == 0:
             print(f"\n=== Episode {episode}/{episodes} ===")
             win_rates = {i: win_counts[i] / episode for i in range(9)}

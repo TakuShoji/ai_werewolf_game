@@ -378,19 +378,18 @@ class WerewolfGame:
                     print(f"プレイヤー{agent.agent_id}が{agent.recognized_role}とカミングアウト（真の役職は{agent.true_role}）")
 
                     if agent.recognized_role == "占い師" and agent.true_role != "占い師":
-                        if real_seer:
                         if real_seer.alive:
                             print(f"プレイヤー{real_seer.agent_id}({real_seer.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
                             self.update_trust(real_seer.agent_id, agent.agent_id, -1)
                             self.liar[real_seer.agent_id][agent.agent_id] = 1
+                    
                     if agent.recognized_role == "霊能者" and agent.true_role != "霊能者":
-                        if real_medium:
                         if real_medium.alive:
                             print(f"プレイヤー{real_medium.agent_id}({real_medium.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
                             self.update_trust(real_medium.agent_id, agent.agent_id, -1)
                             self.liar[real_medium.agent_id][agent.agent_id] = 1
+                    
                     if agent.recognized_role == "狩人" and agent.true_role != "狩人":
-                        if real_hunter:
                         if real_hunter.alive:
                             print(f"プレイヤー{real_hunter.agent_id}({real_hunter.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
                             self.update_trust(real_hunter.agent_id, agent.agent_id, -1)

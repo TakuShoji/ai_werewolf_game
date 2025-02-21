@@ -32,6 +32,7 @@ class Agent:
         self.epsilon = 5
         # gammaの振れ幅を決定。gammaは小さいほど短絡的な性格になる。均一なプレイヤーにしたければself.gammaを固定値に変更すればよい
         max_g, min_g = 0.85, 0.99
+        min_g, max_g = 0.85, 0.99
         self.gamma = (max_g - min_g) * random.random() + min_g
         self.talking_skill = 0
         self.deception_skill = 0

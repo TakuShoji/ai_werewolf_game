@@ -556,7 +556,6 @@ def train_agents(episodes=1000, batch_size=32):
     # 学習後の勝利回数と最終エピソード番号を返す
     return win_counts, episodes
 
-def continue_training(existing_win_counts, start_episode, total_human_win, additional_episodes=500, batch_size=32):
 def continue_training(existing_win_counts, start_episode, additional_episodes=500, batch_size=32):
     roles = ["市民", "市民", "市民", "人狼", "人狼", "占い師", "霊能者", "狩人", "狂人"]
     
@@ -572,7 +571,6 @@ def continue_training(existing_win_counts, start_episode, additional_episodes=50
 
         # 勝利陣営のプレイヤーに勝利カウントを加算
         human_win = sum(1 for a in game.agents if a.true_role == "人狼") == 0  # 人狼全滅 → 人間側の勝利
-        total_human_win += int(human_win)
         for agent in agents:
             if (human_win and agent.true_role in ["市民", "占い師", "霊能者", "狩人"]) or \
                (not human_win and agent.true_role in ["人狼", "狂人"]):

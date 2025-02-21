@@ -557,6 +557,7 @@ def train_agents(episodes=1000, batch_size=32):
     return win_counts, episodes
 
 def continue_training(existing_win_counts, start_episode, total_human_win, additional_episodes=500, batch_size=32):
+def continue_training(existing_win_counts, start_episode, additional_episodes=500, batch_size=32):
     roles = ["市民", "市民", "市民", "人狼", "人狼", "占い師", "霊能者", "狩人", "狂人"]
     
     # 既存の勝率データを継続

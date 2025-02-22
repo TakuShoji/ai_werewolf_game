@@ -35,10 +35,9 @@ class Agent:
         self.gamma = (max_g - min_g) * random.random() + min_g
         self.talking_skill = 0
         self.deception_skill = 0
-        self.revealed_roles = set()
+        self.revealed_roles = set() #以前にカミングアウトした役職を保持する
         self.has_revealed = False
         self.alive = True  # 各エージェントの生存状態
-        self.previous_reveals = set() #以前にカミングアウトした役職を保持する
         self.protect_target  = None
         self.divine_targets = []
         self.werewolf_revealed = [0] * 9
@@ -74,16 +73,16 @@ class Agent:
     def update_epsilon(self):
         self.epsilon = max(0.01, self.epsilon * 0.995)
 
-    def _decide_reveal(self, state):
+    def decide_reveal(self, state):
         state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
         action = self.model(state_tensor)
         return torch.argmax(action).item() == 1
     
-    def decide_reveal(self, state):
+    def _decide_reveal(self, state):
         """
         カミングアウトするかどうかの判断を行う。
-        三役がカミングアウトしないと盛り上がりに欠けるのでこれらは必ずカミングアウトを実行するようにしている。
-        役職にかかわらず随時判断させたい場合はこちらのメソッドの名前に"_"を付けて、先の_decide_revealの"_"を消せばよい。
+        こちらのメソッドでは三役がカミングアウトしないと盛り上がりに欠ける感があるので、これらは必ずカミングアウトを実行するようにしている。
+        名前の先頭の"_"でどちらを使うか選べばよい。
         """
         if self.true_role == "霊能者" or self.true_role == "占い師" or self.true_role == "狂人":
             return True
@@ -91,19 +90,6 @@ class Agent:
             state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
             action = self.model(state_tensor)
             return torch.argmax(action).item() == 1
-    
-    def reveal_role(self, new_role=None):
-        if new_role is None:
-            new_role = self.true_role
-        if new_role in self.revealed_roles:
-            return False
-        if self.has_revealed and new_role != self.recognized_role:
-            self.revealed_roles.add(new_role)
-            return True
-        self.recognized_role = new_role
-        self.has_revealed = True
-        self.revealed_roles.add(new_role)
-        return True
 
     def divine(self, target, game):
         if self.true_role == "占い師":
@@ -166,7 +152,7 @@ class Agent:
                     q_values = self.model(state_tensor)
                     return "黒" if torch.argmax(q_values).item() % 2 == 0 else "白"
         else:
-            pass
+            return False
     
     def get_state(self, game):
         # **生存状態**
@@ -217,10 +203,9 @@ class WerewolfGame:
         for agent in self.agents:
             agent.recognized_role = "市民"
             agent.has_revealed = False
-            agent.reveal_role = set()
+            agent.revealed_roles.clear()
             agent.alive = True
             agent.divine_targets = []
-            agent.previous_reveals.clear()
             agent.werewolf_revealed = [0] * 9
             if agent.true_role == "人狼":
                 agent.werewolf_revealed[agent.agent_id] = 1
@@ -264,7 +249,7 @@ class WerewolfGame:
                         self.rewards[agent.agent_id] += 0.5
                         agent.werewolf_revealed[target.agent_id] = 1
                     print(f"プレイヤー{agent.agent_id}({agent.true_role})がプレイヤー{target.agent_id}を占い、{result}と判定")
-            elif agent.true_role == "占い師":
+            elif agent.true_role == "占い師" and not agent.has_revealed:
                 # 真の占い師はカミングアウトしていなくても占いは密かにに実行する
                 not_divined_agents = [a for a in self.agents if a.alive and a not in agent.divine_targets]
                 candidate = [a for a in not_divined_agents if a != agent]
@@ -323,16 +308,18 @@ class WerewolfGame:
                             else:
                                 self.divination_results[i] += change
                         print(f"プレイヤー{agent.agent_id}({agent.true_role})が処刑されたプレイヤー{self.last_executed.agent_id}を判定: {judge_result}")
-                    elif agent.true_role == "霊能者":
+                    elif agent.true_role == "霊能者" and agent.recognized_role != "霊能者":
                         judge_result = agent.judge(self.last_executed, self)
-                        print(f"真の霊能者プレイヤー{agent.agent_id}が密かに処刑されたプレイヤー{self.last_executed.agent_id}を判定: {judge_result}")
+                        if judge_result:
+                            print(f"真の霊能者プレイヤー{agent.agent_id}が密かに処刑されたプレイヤー{self.last_executed.agent_id}を判定: {judge_result}")
             
             self.handle_reveals()
             self.perform_divinations()
             self.handle_phase('handle_accusations_and_defenses')
             self.votes = [-1] * 9
             self.handle_phase('handle_voting')
-            if self.check_victory():
+            settlement = self.check_victory()
+            if bool(settlement):
                 break
             print("="*30)
             print(f"{self.day}日目 - 夜")
@@ -343,12 +330,14 @@ class WerewolfGame:
             for agent in self.agents:
                 if agent.true_role == "狩人":
                     agent.protect_target = None
-            if self.check_victory():
+            
+            settlement = self.check_victory()
+            if bool(settlement):
                 break
-        
+
         print("【ゲーム終了】")
-    
-    
+        return settlement
+
     def handle_reveals(self):
         real_seer = next((agent for agent in self.agents if agent.true_role == "占い師"), None)
         real_medium = next((agent for agent in self.agents if agent.true_role == "霊能者"), None)
@@ -356,47 +345,42 @@ class WerewolfGame:
 
         for agent in [a for a in self.agents if a.alive]:
             if agent.decide_reveal(agent.get_state(self)):
-                if agent.reveal_role():
-                    if agent.recognized_role in agent.previous_reveals:
-                        self.update_trust(to_id=agent.agent_id, change=-0.2)  # 信頼度低下
-                        continue
-
-                    with torch.no_grad():
-                        state_tensor = torch.FloatTensor(agent.get_state(self))
-                        q_values = agent.model(state_tensor)
-                        best_index = torch.argmax(q_values).item()
-                        possible_roles = ["市民", "占い師", "霊能者", "狩人", "狂人"]
-                        agent.recognized_role = possible_roles[best_index % len(possible_roles)]
-                    agent.has_revealed = True
-                    if agent.true_role == "霊能者" and agent.recognized_role == "霊能者":
-                            self.rewards[agent.agent_id] += 10
-                    elif agent.true_role == "占い師" and agent.recognized_role == "占い師":
-                            self.rewards[agent.agent_id] += 10
-                    elif agent.true_role == "狂人" and agent.recognized_role == "占い師":
-                            self.rewards[agent.agent_id] += 10
-
-                    print(f"プレイヤー{agent.agent_id}が{agent.recognized_role}とカミングアウト（真の役職は{agent.true_role}）")
-
-                    if agent.recognized_role == "占い師" and agent.true_role != "占い師":
-                        if real_seer.alive:
-                            print(f"プレイヤー{real_seer.agent_id}({real_seer.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
-                            self.update_trust(real_seer.agent_id, agent.agent_id, -1)
-                            self.liar[real_seer.agent_id][agent.agent_id] = 1
-                    
-                    if agent.recognized_role == "霊能者" and agent.true_role != "霊能者":
-                        if real_medium.alive:
-                            print(f"プレイヤー{real_medium.agent_id}({real_medium.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
-                            self.update_trust(real_medium.agent_id, agent.agent_id, -1)
-                            self.liar[real_medium.agent_id][agent.agent_id] = 1
-                    
-                    if agent.recognized_role == "狩人" and agent.true_role != "狩人":
-                        if real_hunter.alive:
-                            print(f"プレイヤー{real_hunter.agent_id}({real_hunter.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
-                            self.update_trust(real_hunter.agent_id, agent.agent_id, -1)
-                            self.liar[real_hunter.agent_id][agent.agent_id] = 1
-                else:
+                if len(agent.revealed_roles):
                     self.update_trust(to_id=agent.agent_id, change=-0.25)  # 信頼度低下
-
+                before_recognized_role = agent.recognized_role
+                with torch.no_grad():
+                    state_tensor = torch.FloatTensor(agent.get_state(self))
+                    q_values = agent.model(state_tensor)
+                    best_index = torch.argmax(q_values).item()
+                    possible_roles = set(["市民", "占い師", "霊能者", "狩人", "狂人", "人狼"]) ^ agent.revealed_roles
+                    possible_roles = list(possible_roles)
+                    agent.recognized_role = possible_roles[best_index % len(possible_roles)]
+                    agent.revealed_roles.add(agent.recognized_role)
+                agent.has_revealed = True
+                if agent.true_role == "霊能者" and agent.recognized_role == "霊能者":
+                        self.rewards[agent.agent_id] += 2
+                elif agent.true_role == "占い師" and agent.recognized_role == "占い師":
+                        self.rewards[agent.agent_id] += 2
+                elif agent.true_role == "狂人":
+                        self.rewards[agent.agent_id] += 2
+                if before_recognized_role != agent.recognized_role:
+                    print(f"プレイヤー{agent.agent_id}が{agent.recognized_role}とカミングアウト（真の役職は{agent.true_role}）")
+                if agent.recognized_role == "占い師" and agent.true_role != "占い師":
+                    if real_seer.alive:
+                        print(f"プレイヤー{real_seer.agent_id}({real_seer.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
+                        self.update_trust(real_seer.agent_id, agent.agent_id, -1)
+                        self.liar[real_seer.agent_id][agent.agent_id] = 1
+                if agent.recognized_role == "霊能者" and agent.true_role != "霊能者":
+                    if real_medium.alive:
+                        print(f"プレイヤー{real_medium.agent_id}({real_medium.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
+                        self.update_trust(real_medium.agent_id, agent.agent_id, -1)
+                        self.liar[real_medium.agent_id][agent.agent_id] = 1
+                if agent.recognized_role == "狩人" and agent.true_role != "狩人":
+                    if real_hunter.alive:
+                        print(f"プレイヤー{real_hunter.agent_id}({real_hunter.true_role})は、プレイヤー{agent.agent_id}を深く疑いました")
+                        self.update_trust(real_hunter.agent_id, agent.agent_id, -1)
+                        self.liar[real_hunter.agent_id][agent.agent_id] = 1
+    
     def handle_divinations(self):
         live_agents = [a for a in self.agents if a.alive]
         for agent in live_agents:
@@ -406,6 +390,18 @@ class WerewolfGame:
     
     def handle_voting(self):
         votes = {}
+        
+        def tie_checker(votes):
+            tied_tops = []
+            max_v = max(votes.values())
+            for i, v in votes.items():
+                if v == max_v:
+                    tied_tops.append(i)
+            if len(tied_tops) == 1:
+                return False, []
+            else:
+                return True, tied_tops
+            
         for agent in [a for a in self.agents if a.alive]:
             valid_targets = [a for a in self.agents if a != agent and a.alive]
             if not valid_targets:
@@ -414,7 +410,7 @@ class WerewolfGame:
             target = agent.choose_action(agent.get_state(self), valid_targets)
             self.votes[agent.agent_id] = target.agent_id
             print(f"プレイヤー{agent.agent_id}({agent.true_role})がプレイヤー{target.agent_id}に投票")
-
+            
             # **報酬の処理**
             if agent.true_role in ["狂人", "人狼"]:
                 if target.true_role != "人狼":
@@ -422,16 +418,26 @@ class WerewolfGame:
             else:
                 if target.true_role == "人狼":
                     self.rewards[agent.agent_id] += 2.
-
+            
             votes[target.agent_id] = votes.get(target.agent_id, 0) + 1
-
+        
+        
+        
         if not votes:
             return  # **投票がない場合、処刑はスキップ**
 
-        # **最多票のプレイヤーを処刑**
-        eliminated = max(votes, key=votes.get)
+        is_tie, tied_tops = tie_checker(votes)
+        eliminated = -1
+        
+        if is_tie:
+            print(f"最多得票者が複数いたためランダムで対象を選びます")
+            eliminated = random.choice(tied_tops)
+        else:        
+            # **最多票のプレイヤーを処刑**
+            eliminated = max(votes, key=votes.get)
+        
         eliminated_agent = next(a for a in self.agents if a.agent_id == eliminated)
-
+        
         print(f"プレイヤー{eliminated}({eliminated_agent.true_role})が処刑されました")
 
         if eliminated_agent.true_role == "人狼":
@@ -516,11 +522,11 @@ class WerewolfGame:
 
         # **人狼が全滅 → 人間の勝利**
         if len(alive_wolves) == 0:
-            return True
+            return 1
 
         # **人狼の数が他の生存者と同じか上回る → 人狼の勝利**
         if len(alive_wolves) >= len(alive_humans):
-            return True
+            return -1
 
         # **ゲーム続行**
         return False
@@ -528,12 +534,18 @@ class WerewolfGame:
 # 学習用関数
 def train_agents(episodes=1000, batch_size=32):
     roles = ["市民", "市民", "市民", "人狼", "人狼", "占い師", "霊能者", "狩人", "狂人"]
+    total_human_win = 0
+    total_wolf_win = 0
     for episode in range(1, episodes + 1):
         random.shuffle(roles)
         agents = [Agent(agent_id=i, true_role=roles[i], input_size=72, output_size=5) for i in range(9)]
         win_counts = {i: 0 for i in range(9)}  # 各プレイヤーの勝利回数
         game = WerewolfGame(agents)
-        game.play_game()
+        result = game.play_game()
+        if result > 0:
+            total_human_win += 1
+        else:
+            total_wolf_win += 1
         
         # 勝利陣営を判定し、各プレイヤーの勝率をカウント
         human_win = sum(1 for a in game.agents if a.true_role == "人狼") == 0  # 人狼が全滅 → 人間陣営の勝利
@@ -548,7 +560,6 @@ def train_agents(episodes=1000, batch_size=32):
             agent.update_epsilon()
         
         # 100エピソードごとに勝率を表示
-        # 100エピソードごとに勝率を表示する
         if episode % 100 == 0:
             print(f"\n=== Episode {episode}/{episodes} ===")
             win_rates = {i: win_counts[i] / episode for i in range(9)}
@@ -556,12 +567,14 @@ def train_agents(episodes=1000, batch_size=32):
                 print(f"プレイヤー{agent_id}: 勝率 {win_rate:.2%}")
         game.reset_agents()
     print("全エピソード完了。モデルが学習されました。")  
+    print(f"/n人間陣営勝率：{total_human_win/episodes: .1%}　人狼陣営勝率：{total_wolf_win/episodes: .1%}")
     # 学習後の勝利回数と最終エピソード番号を返す
-    return win_counts, episodes
+    return win_counts, episodes, total_human_win, total_wolf_win
 
-def continue_training(existing_win_counts, start_episode, additional_episodes=500, batch_size=32):
+def continue_training(existing_win_counts, start_episode, total_human_win, total_wolf_win, additional_episodes=500, batch_size=32):
     roles = ["市民", "市民", "市民", "人狼", "人狼", "占い師", "霊能者", "狩人", "狂人"]
-    
+    total_human_win = total_human_win
+    total_wolf_win = total_wolf_win
     # 既存の勝率データを継続
     win_counts = existing_win_counts.copy()
     end_episodes = start_episode
@@ -595,7 +608,8 @@ def continue_training(existing_win_counts, start_episode, additional_episodes=50
         end_episodes = episode
         game.reset_agents()
     print("追加学習完了。モデルがさらに学習されました。")
-    return win_counts, end_episodes
+    print(f"\n人間陣営勝率：{total_human_win/(start_episode + additional_episodes): .1%}　人狼陣営勝率：{total_wolf_win/(start_episode + additional_episodes): .1%}")
+    return win_counts, end_episodes, total_human_win, total_wolf_win
 
 
 # 学習済みエージェントによる実プレイ関数
@@ -607,7 +621,7 @@ def play_trained_game():
         agent.epsilon = 0.0  # 学習済みモデルで行動
 
     game = WerewolfGame(agents)
-    game.play_game()
+    _ = game.play_game()
     game.display_outcome()
     print("人狼ゲームが終了しました。")
 
@@ -617,13 +631,13 @@ if __name__ == '__main__':
     様子を見ながら変更するべし
     """
     
-    win_counts, episodes = train_agents(500, 32)
+    agents, win_counts, episodes, total_human_win, total_wolf_win = train_agents(500, 32)
     
     # 追加で学習させたいときはTrueにする。繰り返し実行できる。
     if False:
-        for _ in range(10):
-            win_counts, episodes = continue_training(win_counts, episodes, additional_episodes=500, batch_size=32)
-            time.sleep(2)
+        for _ in range(2):
+            agents, win_counts, episodes, total_human_win, total_wolf_win = continue_training(win_counts, episodes, agents, total_human_win, total_wolf_win, additional_episodes=500, batch_size=32)
+            time.sleep(4)
     
-    # 上で学習を済ませたプレイヤーたちに実際に一回りプレイさせる
-    play_trained_game()
+        # 上で学習を済ませたプレイヤーたちに実際に一回りプレイさせる
+        play_trained_game(agents)

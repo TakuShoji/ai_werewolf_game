@@ -538,7 +538,7 @@ def train_agents(episodes=1000, batch_size=32):
     total_wolf_win = 0
     for episode in range(1, episodes + 1):
         random.shuffle(roles)
-        agents = [Agent(agent_id=i, true_role=roles[i], input_size=72, output_size=5) for i in range(9)]
+        agents = [Agent(agent_id=i, true_role=roles[i], input_size=72, output_size=8) for i in range(9)]
         win_counts = {i: 0 for i in range(9)}  # 各プレイヤーの勝利回数
         game = WerewolfGame(agents)
         result = game.play_game()
